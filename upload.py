@@ -9,7 +9,10 @@ import argparse
 import os
 import re
 import requests
+import json
+import time
 
+from requests.exceptions import HTTPError
 from bs4 import BeautifulSoup
 
 try:
@@ -88,8 +91,10 @@ def _fetch_api_token(session):
     for script in all_script:
         for line in script.text.splitlines():
             if 'api_token' in line:
-                # api_token: "xoxs-12345-abcdefg....",
-                return API_TOKEN_PATTERN.match(line.strip()).group(1)
+                payload = line.replace('\tvar boot_data = ', '').replace(';', '')
+                parsed_payload = json.loads(payload)
+
+                return parsed_payload['api_token']
 
     raise Exception('api_token not found. response status={}'.format(r.status_code))
 
@@ -100,6 +105,7 @@ def main():
     existing_emojis = get_current_emoji_list(session)
     uploaded = 0
     skipped = 0
+
     for filename in args.slackmoji_files:
         print("Processing {}.".format(filename))
         emoji_name = '{}{}{}'.format(
@@ -115,6 +121,7 @@ def main():
             print("{} upload complete.".format(filename))
             uploaded += 1
     print('\nUploaded {} emojis. ({} already existed)'.format(uploaded, skipped))
+
 
 
 def get_current_emoji_list(session):
@@ -147,13 +154,32 @@ def upload_emoji(session, emoji_name, filename):
     }
     files = {'image': open(filename, 'rb')}
     r = session.post(session.url_add, data=data, files=files, allow_redirects=False)
-    r.raise_for_status()
+
+    try:
+        r.raise_for_status()
+    except HTTPError as e:
+        persist_error(emoji_name, f'HTTP error occurred: {e}')
+        time.sleep(120)
+        upload_emoji(session, emoji_name, filename)
 
     # Slack returns 200 OK even if upload fails, so check for status.
     response_json = r.json()
     if not response_json['ok']:
-        print("Error with uploading %s: %s" % (emoji_name, response_json))
+        if response_json['error'] == 'error_name_taken':
+            upload_emoji(session, f'{emoji_name}_', filename)
+        elif response_json['error'] == 'error_name_taken_i18n':
+            upload_emoji(session, f'{emoji_name}_', filename)
+        else:
+            persist_error(emoji_name, f'Error with uploading {emoji_name}: {response_json}')
+
+def persist_error(emoji_name, message):
+    failures_file = open('failures.txt', 'a')
+
+    print(message, file=failures_file)
+
+    failures_file.close()
 
 
 if __name__ == '__main__':
     main()
+
