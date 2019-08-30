@@ -58,3 +58,7 @@ target/
 
 # Ignore environment variable file
 .env
+.DS_Store
+*/.DS_Store
+**/.DS_Store
+emoji/.DS_Store
